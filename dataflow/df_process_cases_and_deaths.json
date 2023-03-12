@@ -1,0 +1,129 @@
+{
+	"name": "df_process_cases_and_deaths",
+	"properties": {
+		"type": "MappingDataFlow",
+		"typeProperties": {
+			"sources": [
+				{
+					"dataset": {
+						"referenceName": "ds_cases_and_deaths_df",
+						"type": "DatasetReference"
+					},
+					"name": "covidCasesAndDeaths"
+				},
+				{
+					"dataset": {
+						"referenceName": "ds_country_lookup",
+						"type": "DatasetReference"
+					},
+					"name": "countryLookupSource"
+				}
+			],
+			"sinks": [
+				{
+					"dataset": {
+						"referenceName": "ds_processed_cases_and_deaths",
+						"type": "DatasetReference"
+					},
+					"name": "CasesAndDeathsSink",
+					"description": "Add sink dataset for cases and deaths"
+				}
+			],
+			"transformations": [
+				{
+					"name": "FilterUSAonly"
+				},
+				{
+					"name": "SelectOnlyRequiredFields"
+				},
+				{
+					"name": "pivotOnCaseIndicator"
+				},
+				{
+					"name": "lookupCountryCode"
+				},
+				{
+					"name": "selectForSink"
+				}
+			],
+			"scriptLines": [
+				"source(output(",
+				"          country as string,",
+				"          country_code as string,",
+				"          continent as string,",
+				"          population as integer,",
+				"          indicator as string,",
+				"          daily_count as integer,",
+				"          date as string,",
+				"          rate_14_day as double,",
+				"          source as string",
+				"     ),",
+				"     allowSchemaDrift: false,",
+				"     validateSchema: true,",
+				"     ignoreNoFilesFound: false,",
+				"     dateFormats: ['yyyy-MM-dd']) ~> covidCasesAndDeaths",
+				"source(output(",
+				"          country as string,",
+				"          country_code_2_digit as string,",
+				"          country_code_3_digit as string,",
+				"          continent as string,",
+				"          population as integer",
+				"     ),",
+				"     allowSchemaDrift: true,",
+				"     validateSchema: false,",
+				"     ignoreNoFilesFound: false) ~> countryLookupSource",
+				"covidCasesAndDeaths filter(continent == \"America\" && not(isNull(country_code))) ~> FilterUSAonly",
+				"FilterUSAonly select(mapColumn(",
+				"          country,",
+				"          country_code,",
+				"          population,",
+				"          case_indicator = indicator,",
+				"          daily_count,",
+				"          reported_date = date,",
+				"          source",
+				"     ),",
+				"     skipDuplicateMapInputs: true,",
+				"     skipDuplicateMapOutputs: true) ~> SelectOnlyRequiredFields",
+				"SelectOnlyRequiredFields pivot(groupBy(country,",
+				"          country_code,",
+				"          reported_date,",
+				"          population,",
+				"          source),",
+				"     pivotBy(case_indicator, ['deaths', 'confirmed cases']),",
+				"     counts = sum(daily_count),",
+				"     columnNaming: '$N_$V',",
+				"     lateral: true) ~> pivotOnCaseIndicator",
+				"pivotOnCaseIndicator, countryLookupSource lookup(country_code == country_code_3_digit,",
+				"     multiple: false,",
+				"     pickup: 'any',",
+				"     broadcast: 'auto')~> lookupCountryCode",
+				"lookupCountryCode select(mapColumn(",
+				"          country = pivotOnCaseIndicator@country,",
+				"          country = countryLookupSource@country,",
+				"          continent,",
+				"          country_code,",
+				"          country_code_3_digit,",
+				"          reported_date,",
+				"          {counts_confirmed cases},",
+				"          counts_deaths,",
+				"          population = pivotOnCaseIndicator@population,",
+				"          source,",
+				"          country_code_2_digit,",
+				"          population = countryLookupSource@population",
+				"     ),",
+				"     skipDuplicateMapInputs: false,",
+				"     skipDuplicateMapOutputs: true) ~> selectForSink",
+				"selectForSink sink(allowSchemaDrift: true,",
+				"     validateSchema: false,",
+				"     partitionFileNames:['processed_cases_and_deaths.csv'],",
+				"     truncate: true,",
+				"     umask: 0022,",
+				"     preCommands: [],",
+				"     postCommands: [],",
+				"     skipDuplicateMapInputs: true,",
+				"     skipDuplicateMapOutputs: true,",
+				"     partitionBy('hash', 1)) ~> CasesAndDeathsSink"
+			]
+		}
+	}
+}
